@@ -15,7 +15,9 @@ The project home page is at:
 
 http://elinux.org/Crash_handler
 
-== Building ==
+Building
+========
+
 To build this code, type 'make'.
 
 If you are cross-compiling, then first set the CROSS_COMPILE environment
@@ -27,7 +29,9 @@ trailing dash that is customary for a toolchain prefix.  For example:
 Your toolchain prefix is likely to be much simpler than this, and may
 be something like: 'arm-eabi-' or  'arm-unknown-linux-gnu-'
 
-== Installation ==
+Installation
+============
+
 You must be root to install the crash_handler.
 
 To install this code, copy it to some location on the target,
