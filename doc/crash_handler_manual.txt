@@ -613,25 +613,3 @@ Can set to 1 to have the crash_handler write the entire core file into the
 crash report directory.  It will be called core_xx, where xx is a number
 matching the number of the crash report for this crash.
 
-* USE_TABLE_UNWINDER
-default value: 1
-
-Compile in the ARM stack unwinder based on unwind tables built into the 
-ELF image of the executable.  This unwinder will only be effective if
-programs are compiled with -funwind-tables (or some other compilation
-flag that turns on this option).
-
-* USE_GUESS_UNWINDER
-default value: 1
-
-Compile in the ARM stack unwinder based on "best guess" - which compares
-values on the stack with code sequences to try to find matching call-sites
-and return addresses.
-
-* USE_MCTERNAN_UNWINDER
-default value: 0
-
-Compile in the McTernan stack unwinder.  As of this writing, the McTernan
-unwinder has not been integrated into the code yet.  (This is a work in
-progress).
-
