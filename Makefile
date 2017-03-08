@@ -3,8 +3,8 @@ VERSION=0
 REVISION=7
 
 PROG = crash_handler
-INCDIRS = -I/usr/local/include
-LIBDIRS = -L/usr/local/lib
+INCDIRS = -I/usr/local/include -I/usr/include
+LIBDIRS = -L/usr/local/lib -L/usr/lib
 LIBS = -lunwind-x86_64 -lunwind-ptrace
 LDFLAGS =
 
