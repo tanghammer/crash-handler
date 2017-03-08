@@ -2,9 +2,10 @@
 VERSION=0
 REVISION=7
 
+SYSROOT := $(shell $(CC) --print-sysroot)
 PROG = crash_handler
-INCDIRS = -I/usr/local/include -I/usr/include
-LIBDIRS = -L/usr/local/lib -L/usr/lib
+INCDIRS = -I/usr/local/include -I$(SYSROOT)/usr/include
+LIBDIRS = -L/usr/local/lib -L$(SYSROOT)/usr/lib
 LIBS = -lunwind-x86_64 -lunwind-ptrace
 LDFLAGS =
 
@@ -13,10 +14,10 @@ OBJECTS = crash_handler.o \
 	journal.o
 
 $(PROG): $(OBJECTS)
-	$(CROSS_COMPILE)gcc $^ -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
+	$(CROSS_COMPILE)$(CC) $^ -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
 
 %.o: %.c
-	$(CROSS_COMPILE)gcc -c $< -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
+	$(CROSS_COMPILE)$(CC) -c $< -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
 
 clean:
 	rm -f $(PROG) $(OBJECTS)
