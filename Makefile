@@ -19,7 +19,7 @@ $(PROG): $(OBJECTS)
 	$(CROSS_COMPILE)gcc -c $< -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
 
 clean:
-	rm $(PROG) $(OBJECTS)
+	rm -f $(PROG) $(OBJECTS)
 
 distclean:
 	-make clean
