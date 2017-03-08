@@ -4,8 +4,8 @@ REVISION=7
 
 SYSROOT := $(shell $(CC) --print-sysroot)
 PROG = crash_handler
-INCDIRS = -I/usr/local/include -I$(SYSROOT)/usr/include
-LIBDIRS = -L/usr/local/lib -L$(SYSROOT)/usr/lib
+INCDIRS = -I$(SYSROOT)/usr/include
+LIBDIRS = -L$(SYSROOT)/usr/lib
 LIBS = -lunwind-x86_64 -lunwind-ptrace
 LDFLAGS =
 
