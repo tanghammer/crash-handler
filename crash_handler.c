@@ -61,7 +61,7 @@
 /****************************************
  * compile-time configurable items
  ****************************************/
-#define MAX_CRASH_REPORTS   10
+#define MAX_CRASH_REPORTS   20
 #define CRASH_REPORT_DIR    "/tmp/crash_reports"
 #define CRASH_REPORT_FILENAME   "crash_report"
 
@@ -210,7 +210,7 @@ static int find_and_open_crash_report(void)
             continue;
         }
 
-        fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0600);
+        fd = open(path, O_CREAT | O_EXCL | O_WRONLY, 0644);
         if (fd < 0)
         {
             continue;   /* raced ? */
@@ -224,7 +224,7 @@ static int find_and_open_crash_report(void)
     snprintf(path, sizeof(path), CRASH_REPORT_DIR"/"CRASH_REPORT_FILENAME"_%02d", i);
     ts_num = oldest;
 
-    fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
     fchown(fd, ROOT_UID, ROOT_GID);
 
     return fd;
