@@ -62,11 +62,11 @@
  * compile-time configurable items
  ****************************************/
 #define MAX_CRASH_REPORTS   20
-#define CRASH_REPORT_DIR    "/tmp/crash_reports"
+#define CRASH_REPORT_DIR    "/var/crash_reports"
 #define CRASH_REPORT_FILENAME   "crash_report"
 
 #define DO_CRASH_JOURNAL    1
-#define CRASH_JOURNAL_FILENAME  "/tmp/crash_journal"
+#define CRASH_JOURNAL_FILENAME  "/var/crash_journal"
 
 /* set to 1 to save a full core file for each crash report */
 #define DO_CORE_FILE    0
