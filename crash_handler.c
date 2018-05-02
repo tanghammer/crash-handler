@@ -841,6 +841,7 @@ int main(int argc, char *argv[])
 
     if( report_fd >= 0 )
     {
+        fsync(report_fd);
         close(report_fd);
     }
 
