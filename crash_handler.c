@@ -49,6 +49,8 @@
 #include <asm/ptrace.h>
 #include <sys/wait.h>
 #include <sys/user.h>
+#include <sys/klog.h>
+#include <dirent.h>
 
 #include <libunwind-ptrace.h>
 
@@ -56,12 +58,12 @@
 #include "crash_handler.h"
 
 #define VERSION 0
-#define REVISION 7
+#define REVISION 8
 
 /****************************************
  * compile-time configurable items
  ****************************************/
-#define MAX_CRASH_REPORTS   20
+#define MAX_CRASH_REPORTS   32
 #define CRASH_REPORT_DIR    "/var/crash_reports"
 #define CRASH_REPORT_FILENAME   "crash_report"
 
@@ -102,9 +104,6 @@ enum
 #define panic(args...)                      \
     do { fprintf (stderr, args); ++nerrors; } while (0)
 
-static unw_addr_space_t addr_space = NULL;
-static struct UPT_info *upt_info = NULL;
-
 static int killed;
 
 void klog_fmt(const char *fmt, ...)
@@ -120,7 +119,7 @@ void klog_fmt(const char *fmt, ...)
 
     pid = getpid();
     fd = open("/dev/kmsg", O_WRONLY);
-    if(fd<0)
+    if (fd < 0)
     {
         va_end(ap);
         return;
@@ -148,7 +147,7 @@ void report_out(int rfd, const char *fmt, ...)
     va_list ap;
     va_start(ap, fmt);
 
-    if( rfd >= 0 )
+    if (rfd >= 0)
     {
         int len;
         vsnprintf(buf, sizeof(buf), fmt, ap);
@@ -163,6 +162,134 @@ void report_out(int rfd, const char *fmt, ...)
     typeof(x) __dummy1;     \
     typeof(y) __dummy2;     \
     (void)(&__dummy1 == &__dummy2); }
+
+
+/* Similar to getline(), except gets process pid task IDs.
+ * Returns positive (number of TIDs in list) if success,
+ * otherwise 0 with errno set. */
+size_t get_tids(pid_t **const listptr, size_t *const sizeptr, const pid_t pid)
+{
+    char     dirname[64];
+    DIR     *dir;
+    pid_t   *list;
+    size_t   size, used = 0;
+
+    if (!listptr || !sizeptr || pid < (pid_t)1)
+    {
+        errno = EINVAL;
+        return (size_t)0;
+    }
+
+    if (*sizeptr > 0)
+    {
+        list = *listptr;
+        size = *sizeptr;
+    }
+    else
+    {
+        list = *listptr = NULL;
+        size = *sizeptr = 0;
+    }
+
+    if (snprintf(dirname, sizeof dirname, "/proc/%d/task/", (int)pid) >= (int)sizeof dirname)
+    {
+        errno = ENOTSUP;
+        return (size_t)0;
+    }
+
+    dir = opendir(dirname);
+    if (!dir)
+    {
+        errno = ESRCH;
+        return (size_t)0;
+    }
+
+    while (1)
+    {
+        struct dirent *ent;
+        int            value;
+        char           dummy;
+
+        errno = 0;
+        ent = readdir(dir);
+        if (!ent)
+        {
+            break;
+        }
+
+        /* Parse TIDs. Ignore non-numeric entries. */
+        if (sscanf(ent->d_name, "%d%c", &value, &dummy) != 1)
+        {
+            continue;
+        }
+
+        /* Ignore obviously invalid entries. */
+        if (value < 1)
+        {
+            continue;
+        }
+
+        /* Make sure there is room for another TID. */
+        if (used >= size)
+        {
+            size = (used | 127) + 128;
+            list = realloc(list, size * sizeof list[0]);
+
+            if (!list)
+            {
+                closedir(dir);
+                errno = ENOMEM;
+                return (size_t)0;
+            }
+
+            *listptr = list;
+            *sizeptr = size;
+        }
+
+        /* Add to list. */
+        list[used++] = (pid_t)value;
+    }
+
+    if (errno)
+    {
+        const int saved_errno = errno;
+        closedir(dir);
+        errno = saved_errno;
+        return (size_t)0;
+    }
+
+    if (closedir(dir))
+    {
+        errno = EIO;
+        return (size_t)0;
+    }
+
+    /* None? */
+    if (used < 1)
+    {
+        errno = ESRCH;
+        return (size_t)0;
+    }
+
+    /* Make sure there is room for a terminating (pid_t)0. */
+    if (used >= size)
+    {
+        size = used + 1;
+        list = realloc(list, size * sizeof list[0]);
+        if (!list)
+        {
+            errno = ENOMEM;
+            return (size_t)0;
+        }
+        *listptr = list;
+        *sizeptr = size;
+    }
+
+    /* Terminate list; done. */
+    list[used] = (pid_t)0;
+    errno = 0;
+    return used;
+}
 
 /*
  * find_and_open_crash_report - find an available crash report slot, if any,
@@ -198,7 +325,8 @@ static int find_and_open_crash_report(void)
 
         if (!stat(path, &sb))
         {
-            if (sb.st_mtime < mtime) {
+            if (sb.st_mtime < mtime)
+            {
                 oldest = i;
                 mtime = sb.st_mtime;
             }
@@ -281,7 +409,8 @@ void dump_task_info(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
     LOG("pid: %u, uid: %u, gid: %u \n", pid, uid, gid);
     LOG("cmdline: %s\n", cmdline);
     LOG("name: %s\n", name);
-    LOG("signal: %u\n\n", sig);
+    LOG("signal: %u\n", sig);
+    LOG("================\n\n");
 
     record_crash_to_journal(CRASH_JOURNAL_FILENAME, pid, cmdline);
 }
@@ -381,7 +510,7 @@ mapinfo *get_mapinfo_list(pid_t pid)
         {
             LOG(" %s", data);
             mapinfo *mi = parse_maps_line(data);
-            if(mi)
+            if (mi)
             {
                 mi->next = milist;
                 milist = mi;
@@ -473,13 +602,12 @@ void dump_fault_addr(int pid, int sig)
 int dump_pc_code(int pid)
 {
     struct pt_regs r;
-    //pt_regs r;
     int *start, *end;
     int val;
     int *i;
 
     LOG("[code around PC]\n");
-    if(ptrace(PTRACE_GETREGS, pid, 0, &r))
+    if (ptrace(PTRACE_GETREGS, pid, 0, &r))
     {
         LOG("cannot get registers: %d (%s)\n", errno, strerror(errno));
         return;
@@ -487,7 +615,7 @@ int dump_pc_code(int pid)
 
     start = (int *)r.ARM_pc-0x10;
     end = (int *)r.ARM_pc+0x10;
-    for(i = start; i<end; i++)
+    for (i = start; i < end; i++)
     {
         val = get_remote_word(pid, i);
         LOG("0x%08lx: %08lx", (unsigned long)i, val);
@@ -509,7 +637,7 @@ void dump_klog_tail()
 
     size = klogctl(10, NULL, 0);
     buffer = malloc(size);
-    if(!buffer)
+    if (!buffer)
     {
         return;
     }
@@ -534,7 +662,7 @@ void dump_klog_tail()
     free(buffer);
 }
 
-void do_backtrace()
+bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
 {
     unw_word_t ip, sp, start_ip = 0, off;
     int n = 0, ret;
@@ -542,10 +670,78 @@ void do_backtrace()
     unw_cursor_t c;
     char buf[512];
     size_t len;
+    unw_addr_space_t addr_space = NULL;
+    struct UPT_info *upt_info = NULL;
+    int attach_status = -1;
+
+    char path[256];
+    char thread_name[32];
+    int fd;
+
+    strcpy(thread_name, "UNKNOWN");
+    sprintf(path, "/proc/%d/task/%d/comm", pid, tid);
+    fd = open(path, O_RDONLY);
+
+    if (fd >= 0)
+    {
+        char buffer[32];
+        read(fd, buffer, 32);
+        strncpy(thread_name, buffer, 32);
+        thread_name[31] = 0;
+        thread_name[strcspn(thread_name, "\n")] = 0;
+        close(fd);
+    }
+    else
+    {
+        DLOG("problem opening %s\n", path);
+    }
+
+    LOG("[thread]\n");
+    LOG("name: %s\n", thread_name);
+    LOG("tid: %d\n\n", tid);
+
+    addr_space = unw_create_addr_space(&_UPT_accessors, 0);
+    if (!addr_space)
+    {
+        LOG("unw_create_addr_space() failed");
+    }
+
+    upt_info = (struct UPT_info*)_UPT_create(tid);
+
+    if (!upt_info)
+    {
+        LOG("Failed to create upt info.");
+        unw_destroy_addr_space(addr_space);
+        return false;
+    }
+
+    attach_status = ptrace(PTRACE_ATTACH, tid, 0, 0);
+
+    if (attach_status < 0)
+    {
+        LOG("crash_handler: ptrace attach failed: %s\n", strerror(errno));
+        _UPT_destroy(upt_info);
+        unw_destroy_addr_space(addr_space);
+        return false;
+    }
+    else
+    {
+        DLOG("ptrace attach to pid %d succeeded\n", tid);
+    }
+
+    if (sig)
+    {
+        dump_fault_addr(tid, sig); /* uses ptrace */
+    }
+
+    dump_registers(tid); /* uses ptrace */
+#if defined(__arm__)
+    dump_pc_code(tid); /* uses ptrace */
+#endif
 
     LOG("[call stack]\n");
 
-    ret = unw_init_remote (&c, addr_space, upt_info);
+    ret = unw_init_remote(&c, addr_space, upt_info);
     if (ret < 0)
     {
         LOG("unw_init_remote() failed: ret=%d code=", ret);
@@ -568,12 +764,21 @@ void do_backtrace()
         }
 
         LOG("\n");
-        return;
+
+        if (attach_status == 0)
+        {
+            int detach_status;
+            detach_status = ptrace(PTRACE_DETACH, tid, 0, 0);
+        }
+
+        _UPT_destroy(upt_info);
+        unw_destroy_addr_space(addr_space);
+        return false;
     }
 
     do
     {
-        if ((ret = unw_get_reg (&c, UNW_REG_IP, &ip)) < 0 || (ret = unw_get_reg (&c, UNW_REG_SP, &sp)) < 0)
+        if ((ret = unw_get_reg(&c, UNW_REG_IP, &ip)) < 0 || (ret = unw_get_reg(&c, UNW_REG_SP, &sp)) < 0)
         {
             LOG("unw_get_reg/unw_get_proc_name() failed: ret=%d\n", ret);
         }
@@ -586,7 +791,7 @@ void do_backtrace()
         buf[0] = '\0';
         if (print_names)
         {
-            unw_get_proc_name (&c, buf, sizeof (buf), &off);
+            unw_get_proc_name(&c, buf, sizeof (buf), &off);
         }
 
 
@@ -594,7 +799,7 @@ void do_backtrace()
         {
             if (off)
             {
-                len = strlen (buf);
+                len = strlen(buf);
                 if (len >= sizeof (buf) - 32)
                 {
                     len = sizeof (buf) - 32;
@@ -604,7 +809,7 @@ void do_backtrace()
             LOG("%016lx %-32s (sp=%016lx)\n", (long) ip, buf, (long) sp);
         }
 
-        if ((ret = unw_get_proc_info (&c, &pi)) < 0)
+        if ((ret = unw_get_proc_info(&c, &pi)) < 0)
         {
             LOG("unw_get_proc_info(ip=0x%lx) failed: ret=%d\n", (long) ip, ret);
         }
@@ -617,7 +822,7 @@ void do_backtrace()
         {
             unw_word_t bsp;
 
-            if ((ret = unw_get_reg (&c, UNW_IA64_BSP, &bsp)) < 0)
+            if ((ret = unw_get_reg(&c, UNW_IA64_BSP, &bsp)) < 0)
             {
                 LOG("unw_get_reg() failed: ret=%d\n", ret);
             }
@@ -632,11 +837,11 @@ void do_backtrace()
             LOG("\n");
         }
 
-        ret = unw_step (&c);
+        ret = unw_step(&c);
 
         if (ret < 0)
         {
-            unw_get_reg (&c, UNW_REG_IP, &ip);
+            unw_get_reg(&c, UNW_REG_IP, &ip);
             LOG("FAILURE: unw_step() returned %d for ip=%lx (start ip=%lx)\n",ret, (long) ip, (long) start_ip);
         }
 
@@ -663,53 +868,60 @@ void do_backtrace()
     {
         LOG("================\n\n");
     }
+
+    if (attach_status == 0)
+    {
+        int detach_status;
+        detach_status = ptrace(PTRACE_DETACH, tid, 0, 0);
+    }
+
+    if (upt_info)
+    {
+        _UPT_destroy(upt_info);
+    }
+
+    if (addr_space)
+    {
+        unw_destroy_addr_space(addr_space);
+    }
+
+    return true;
 }
 
 int generate_crash_report(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
 {
     mapinfo *milist;
-    int attach_status = -1;
 
-    dump_task_info(pid, sig, uid, pid); /* uses /proc */
+    pid_t *tid = 0;
+    size_t tids = 0;
+    size_t tids_max = 0;
+    size_t t = 0;
+
+    dump_task_info(pid, sig, uid, gid); /* uses /proc */
 
     LOG("[memory maps]\n");
     /* get_mapinfo_list retrieves list and outputs to LOG */
     milist = get_mapinfo_list(pid); /* uses /proc */
-    LOG("\n");
+    LOG("================\n\n");
 
-    attach_status = ptrace(PTRACE_ATTACH, pid, 0, 0);
-
-    if (attach_status < 0)
+    tids = get_tids(&tid, &tids_max, pid);
+    if (!tids)
     {
-        LOG("crash_handler: ptrace attach failed: %s\n", strerror(errno));
-    }
-    else
-    {
-        DLOG("ptrace attach to pid %d succeeded\n", pid);
+        LOG("crash_handler:  failed to get list of thread ids");
     }
 
-    if (sig)
+    for (t = 0; t < tids; t++)
     {
-        dump_fault_addr(pid, sig); /* uses ptrace */
+        do_backtrace(pid, tid[t], pid == tid[t] ? sig : 0);
     }
-
-    dump_registers(pid); /* uses ptrace */
-#if defined(__arm__)
-    dump_pc_code(pid); /* uses ptrace */
-#endif
-
-    do_backtrace();
 
     dump_klog_tail();
 
     LOG("--- done ---\n");
 
-    if (attach_status == 0 )
-    {
-        int detach_status;
-        detach_status = ptrace(PTRACE_DETACH, pid, 0, 0);
-    }
     free_mapinfo_list(milist);
+
+    return 0;
 }
 
 
@@ -731,7 +943,7 @@ int main(int argc, char *argv[])
     unsigned int gid;
 
     // check for install argument
-    if (argc==2 && strcmp(argv[1], "--install")==0)
+    if (argc == 2 && strcmp(argv[1], "--install") == 0)
     {
         char actualpath[PATH_MAX];
         char *ptr;
@@ -768,13 +980,13 @@ int main(int argc, char *argv[])
         return 0;
     }
 
-    if (argc==2 && strcmp(argv[1], "--version")==0)
+    if (argc == 2 && strcmp(argv[1], "--version") == 0)
     {
         printf("crash_handler v%d.%d\n", VERSION, REVISION);
         return 0;
     }
 
-    if (argc<3)
+    if (argc < 3)
     {
         printf("Usage: crash_handler <pid> <sig> <uid> <gid>\n\n");
         printf("Under normal usage, the crash_handler is called directly\n");
@@ -790,12 +1002,6 @@ int main(int argc, char *argv[])
         return -1;
     }
 
-    addr_space = unw_create_addr_space (&_UPT_accessors, 0);
-    if (!addr_space)
-    {
-        LOG("unw_create_addr_space() failed");
-    }
-
     // parse args from command line
     pid = atoi(argv[1]);
     sig = atoi(argv[2]);
@@ -804,20 +1010,13 @@ int main(int argc, char *argv[])
 
     report_fd = find_and_open_crash_report();
 
-    upt_info = (struct UPT_info*)_UPT_create(pid);
-
-    if (!upt_info)
-    {
-        LOG("Failed to create upt info.");
-    }
-
     // this MUST be done before reading the core from standard in
     generate_crash_report(pid, sig, uid, gid);
 
 #if DO_CORE_FILE
     /* save the core file, alongside the crash_report file */
     snprintf(path, sizeof(path), CRASH_REPORT_DIR"/core_%02d", ts_num);
-    core_out_fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0600);
+    core_out_fd = open(path, O_CREAT | O_TRUNC | O_WRONLY, 0644);
 
     /* Count bytes in standard input (the core dump) */
     tot = 0;
@@ -839,20 +1038,10 @@ int main(int argc, char *argv[])
     }
 #endif  /* DO_CORE_FILE */
 
-    if( report_fd >= 0 )
+    if (report_fd >= 0)
     {
         fsync(report_fd);
         close(report_fd);
-    }
-
-    if (upt_info)
-    {
-        _UPT_destroy(upt_info);
-    }
-
-    if (addr_space)
-    {
-        unw_destroy_addr_space(addr_space);
     }
 
     exit(EXIT_SUCCESS);
