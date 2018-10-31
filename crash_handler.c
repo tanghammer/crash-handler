@@ -415,18 +415,6 @@ void dump_task_info(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
     record_crash_to_journal(CRASH_JOURNAL_FILENAME, pid, cmdline);
 }
 
-void dump_word(int pid)
-{
-    unsigned long data;
-
-    if (ptrace(PTRACE_PEEKTEXT, pid, 0, &data))
-    {
-        LOG("cannot get word: %s\n", strerror(errno));
-        return;
-    }
-    LOG("word at 0 is: %ul\n", data);
-}
-
 // 6f000000-6f01e000 rwxp 00000000 00:0c 16389419   /system/lib/libcomposer.so
 // 012345678901234567890123456789012345678901234567890123456789
 // 0         1         2         3         4         5
@@ -586,7 +574,7 @@ void dump_fault_addr(int pid, int sig)
 
     LOG("[exception info]\n");
     memset(&si, 0, sizeof(si));
-    if(ptrace(PTRACE_GETSIGINFO, pid, 0, &si))
+    if (ptrace(PTRACE_GETSIGINFO, pid, 0, &si))
     {
         LOG("cannot get siginfo: %d (%s) \n", errno, strerror(errno));
     }
@@ -645,7 +633,7 @@ void dump_klog_tail()
     start = buffer;
 
     /* put tail end of buffer into log */
-    if (size>MAX_LOG_TAIL_TO_SAVE)
+    if (size > MAX_LOG_TAIL_TO_SAVE)
     {
         len = MAX_LOG_TAIL_TO_SAVE;
         start = buffer+size-len;
@@ -672,7 +660,6 @@ bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
     size_t len;
     unw_addr_space_t addr_space = NULL;
     struct UPT_info *upt_info = NULL;
-    int attach_status = -1;
 
     char path[256];
     char thread_name[32];
@@ -693,7 +680,7 @@ bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
     }
     else
     {
-        DLOG("problem opening %s\n", path);
+        DLOG("Problem opening %s\n", path);
     }
 
     LOG("[thread]\n");
@@ -704,6 +691,7 @@ bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
     if (!addr_space)
     {
         LOG("unw_create_addr_space() failed");
+        return false;
     }
 
     upt_info = (struct UPT_info*)_UPT_create(tid);
@@ -715,26 +703,13 @@ bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
         return false;
     }
 
-    attach_status = ptrace(PTRACE_ATTACH, tid, 0, 0);
-
-    if (attach_status < 0)
-    {
-        LOG("crash_handler: ptrace attach failed: %s\n", strerror(errno));
-        _UPT_destroy(upt_info);
-        unw_destroy_addr_space(addr_space);
-        return false;
-    }
-    else
-    {
-        DLOG("ptrace attach to pid %d succeeded\n", tid);
-    }
-
     if (sig)
     {
         dump_fault_addr(tid, sig); /* uses ptrace */
     }
 
     dump_registers(tid); /* uses ptrace */
+
 #if defined(__arm__)
     dump_pc_code(tid); /* uses ptrace */
 #endif
@@ -765,12 +740,6 @@ bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
 
         LOG("\n");
 
-        if (attach_status == 0)
-        {
-            int detach_status;
-            detach_status = ptrace(PTRACE_DETACH, tid, 0, 0);
-        }
-
         _UPT_destroy(upt_info);
         unw_destroy_addr_space(addr_space);
         return false;
@@ -778,102 +747,35 @@ bool do_backtrace(pid_t pid, pid_t tid, unsigned sig)
 
     do
     {
-        if ((ret = unw_get_reg(&c, UNW_REG_IP, &ip)) < 0 || (ret = unw_get_reg(&c, UNW_REG_SP, &sp)) < 0)
-        {
-            LOG("unw_get_reg/unw_get_proc_name() failed: ret=%d\n", ret);
-        }
+        unw_word_t ip, sp, offset;
+        char symbol[4096];
 
-        if (n == 0)
+        if (unw_get_reg(&c, UNW_REG_IP, &ip) < 0)
         {
-            start_ip = ip;
-        }
-
-        buf[0] = '\0';
-        if (print_names)
-        {
-            unw_get_proc_name(&c, buf, sizeof (buf), &off);
-        }
-
-
-        if (verbose)
-        {
-            if (off)
-            {
-                len = strlen(buf);
-                if (len >= sizeof (buf) - 32)
-                {
-                    len = sizeof (buf) - 32;
-                }
-                sprintf (buf + len, "+0x%lx", (unsigned long) off);
-            }
-            LOG("%016lx %-32s (sp=%016lx)\n", (long) ip, buf, (long) sp);
-        }
-
-        if ((ret = unw_get_proc_info(&c, &pi)) < 0)
-        {
-            LOG("unw_get_proc_info(ip=0x%lx) failed: ret=%d\n", (long) ip, ret);
-        }
-        else if (verbose)
-        {
-            LOG("\tproc=%016lx-%016lx\n\thandler=%lx lsda=%lx", (long) pi.start_ip, (long) pi.end_ip, (long) pi.handler, (long) pi.lsda);
-        }
-
-#if UNW_TARGET_IA64
-        {
-            unw_word_t bsp;
-
-            if ((ret = unw_get_reg(&c, UNW_IA64_BSP, &bsp)) < 0)
-            {
-                LOG("unw_get_reg() failed: ret=%d\n", ret);
-            }
-            else if (verbose)
-            {
-                LOG(" bsp=%lx", bsp);
-            }
-        }
-#endif
-        if (verbose)
-        {
-            LOG("\n");
-        }
-
-        ret = unw_step(&c);
-
-        if (ret < 0)
-        {
-            unw_get_reg(&c, UNW_REG_IP, &ip);
-            LOG("FAILURE: unw_step() returned %d for ip=%lx (start ip=%lx)\n",ret, (long) ip, (long) start_ip);
-        }
-
-        if (++n > 64)
-        {
-            /* guard against bad unwind info in old libraries... */
-            LOG("too deeply nested---assuming bogus unwind (start ip=%lx)\n",(long) start_ip);
+            LOG("ERROR: cannot read program counter\n");
             break;
         }
-        if (nerrors > nerrors_max)
+
+        if (unw_get_reg(&c, UNW_REG_SP, &sp) < 0)
         {
-            LOG("Too many errors (%d)!\n", nerrors);
+            LOG("ERROR: cannot read stack pointer\n");
             break;
         }
-    }
-    while (ret > 0);
 
-    if (ret < 0)
-    {
-        LOG("unwind failed with ret=%d\n", ret);
-    }
+        if (unw_get_proc_name(&c, symbol, sizeof(symbol), &offset) < 0)
+        {
+            strcpy(symbol, "??");
+        }
 
-    if (verbose)
-    {
-        LOG("================\n\n");
-    }
+        LOG("#%-2d 0x%016" PRIxPTR " sp=0x%016" PRIxPTR " (%s+0x%" PRIxPTR ")\n",
+            ++n,
+            ip,
+            sp,
+            symbol,
+            offset);
+    } while (unw_step(&c) > 0);
 
-    if (attach_status == 0)
-    {
-        int detach_status;
-        detach_status = ptrace(PTRACE_DETACH, tid, 0, 0);
-    }
+    LOG("================\n\n");
 
     if (upt_info)
     {
@@ -896,6 +798,7 @@ int generate_crash_report(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
     size_t tids = 0;
     size_t tids_max = 0;
     size_t t = 0;
+    long   r;
 
     dump_task_info(pid, sig, uid, gid); /* uses /proc */
 
@@ -904,16 +807,86 @@ int generate_crash_report(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
     milist = get_mapinfo_list(pid); /* uses /proc */
     LOG("================\n\n");
 
+    if (!milist)
+    {
+        LOG("crash_handler:  failed to load memory maps\n");
+        return 1;
+    }
+
+    // Sieze main thead first
+    if (ptrace(PTRACE_SEIZE, pid, (void *)0, (void *)0) != 0)
+    {
+        LOG("crash_handler:  failed to seize main thead, %s\n", strerror(errno));
+        return 1;
+    }
+
+    // Put main thread into ptrace-stop state.
+    if (ptrace(PTRACE_INTERRUPT, pid, (void *)0, (void *)0) != 0)
+    {
+        LOG("crash_handler:  failed to interrupt main thread, %s\n", strerror(errno));
+        ptrace(PTRACE_DETACH, pid, (void *)0, (void *)0);
+        return 1;
+    }
+
     tids = get_tids(&tid, &tids_max, pid);
     if (!tids)
     {
-        LOG("crash_handler:  failed to get list of thread ids");
+        LOG("crash_handler:  failed to get list of thread ids\n");
+    }
+
+    for (t = 0; t < tids; t++)
+    {
+        // Skip main thread
+        if (pid == tid[t])
+        {
+            continue;
+        }
+
+        do
+        {
+            r = ptrace(PTRACE_SEIZE, tid[t], (void *)0, (void *)0);
+        }
+        while (r == -1L && (errno == EBUSY || errno == EFAULT || errno == ESRCH));
+
+        if (r == -1L)
+        {
+            LOG("crash_handler:  failed to attach to thread id, %s\n", strerror(errno));
+            const int saved_errno = errno;
+            while (t-- > 0)
+            {
+                do
+                {
+                    r = ptrace(PTRACE_DETACH, tid[t], (void *)0, (void *)0);
+                }
+                while (r == -1L && (errno == EBUSY || errno == EFAULT || errno == ESRCH));
+            }
+            tids = 0;
+            errno = saved_errno;
+            break;
+        }
+
+        // Put the task into ptrace-stop state.
+        if (ptrace(PTRACE_INTERRUPT, tid[t], (void *)0, (void *)0) != 0)
+        {
+            LOG("crash_handler:  failed to interrupt thread id, %s\n", strerror(errno));
+            continue;
+        }
     }
 
     for (t = 0; t < tids; t++)
     {
         do_backtrace(pid, tid[t], pid == tid[t] ? sig : 0);
     }
+
+    for (t = 0; t < tids; t++)
+    {
+        do
+        {
+            r = ptrace(PTRACE_DETACH, tid[t], (void *)0, (void *)0);
+        }
+        while (r == -1 && (errno == EBUSY || errno == EFAULT || errno == ESRCH));
+    }
+    tids = 0;
 
     dump_klog_tail();
 

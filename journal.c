@@ -12,8 +12,10 @@
 
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
 #include <time.h>
@@ -87,7 +89,7 @@ void read_record(int i, char *line)
 		token = strtok_r(NULL, " ", &saveptr);
 	}
 	cr->last_count = j;
-	
+
 	crash_journal.rec_count += 1;
 	return;
 }
@@ -123,7 +125,7 @@ int read_crash_journal(char *filename)
 		return ccode;
 	}
 	buffer[count]=0;
-	
+
 	/* read start */
 	token = strtok_r(buffer, " \n", &saveptr1);
 	if (token==NULL) {
@@ -159,7 +161,7 @@ int read_crash_journal(char *filename)
 
 	/* read records */
 	rec_index = 0;
-	while (token != NULL && rec_index<MAX_CRASH_RECORDS) { 
+	while (token != NULL && rec_index<MAX_CRASH_RECORDS) {
 		token = strtok_r(NULL, "\n", &saveptr1);
 		read_record(rec_index, token);
 		rec_index++;
@@ -182,7 +184,7 @@ int write_crash_journal(char *filename)
 		DLOG("problem '%s' writing journal\n", strerror(errno));
 		return fd;
 	}
-	
+
 	fmt_count = strftime(buffer, MAX_BUFFER,
 		"start=%Y-%m-%d-%H:%M:%S\n", localtime(&cj->journal_start));
 	count = write(fd, buffer, fmt_count);
@@ -214,7 +216,7 @@ void dump_crash_journal()
 	size_t fmt_count;
 	int count;
 	int i, j;
-	
+
 	fmt_count = strftime(buffer, MAX_BUFFER,
 		"journal_start: %Y-%m-%d-%H:%M:%S\n",
 		localtime(&cj->journal_start));
@@ -243,7 +245,7 @@ void dump_crash_journal()
 struct crash_record_struct *find_crash_record(int pid, char *name)
 {
 	int i;
-	
+
 	for(i=0; i<MAX_CRASH_RECORDS; i++) {
 		// FIXTHIS - should allow control over what comparison
 		// policy is used in find_crash_record
@@ -262,12 +264,12 @@ struct crash_record_struct *find_oldest_crash_record()
 	int i, j;
 	struct crash_record_struct *cr, *oldest_cr;
 	time_t oldest_time, newest_time_this_record;
-	
+
 	oldest_cr = NULL;
 	oldest_time = time(NULL);
 	for(i=0; i<MAX_CRASH_RECORDS; i++) {
 		cr = &crash_journal.crash_record[i];
-		newest_time_this_record = 0;	
+		newest_time_this_record = 0;
 		for( j=0; j<cr->last_count; j++ ) {
 			if(cr->last_crash[j]>newest_time_this_record) {
 				newest_time_this_record = cr->last_crash[j];
@@ -336,7 +338,7 @@ void record_crash_to_journal(char *filename, int pid, char *name)
 			cj->rec_count++;
 			cr = &cj->crash_record[0];
 		} else {
-			/* overwrite the oldest entry */ 
+			/* overwrite the oldest entry */
 			cr = find_oldest_crash_record();
 		}
 		/* fill in the record */
