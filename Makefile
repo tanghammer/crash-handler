@@ -17,7 +17,7 @@ $(PROG): $(OBJECTS)
 	$(CROSS_COMPILE)$(CC) $^ -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
 
 %.o: %.c
-	$(CROSS_COMPILE)$(CC) -c $< -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
+	$(CROSS_COMPILE)$(CC) -g  -c $< -o $@ ${LDFLAGS} ${INCDIRS} ${LIBDIRS} ${LIBS}
 
 clean:
 	rm -f $(PROG) $(OBJECTS)

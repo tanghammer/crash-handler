@@ -415,7 +415,13 @@ void dump_task_info(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
     record_crash_to_journal(CRASH_JOURNAL_FILENAME, pid, cmdline);
 }
 
+// for 32bit,like x86, ARM32
 // 6f000000-6f01e000 rwxp 00000000 00:0c 16389419   /system/lib/libcomposer.so
+// 012345678901234567890123456789012345678901234567890123456789
+// 0         1         2         3         4         5
+
+// for 64bit,like x64, ARM64
+// 563cee6f0000-563cee7f4000 r-xp 00000000 08:01 393351                     /bin/bash
 // 012345678901234567890123456789012345678901234567890123456789
 // 0         1         2         3         4         5
 
@@ -497,12 +503,14 @@ mapinfo *get_mapinfo_list(pid_t pid)
         while (fgets(data, 1024, fp))
         {
             LOG(" %s", data);
+            #if 0
             mapinfo *mi = parse_maps_line(data);
             if (mi)
             {
                 mi->next = milist;
                 milist = mi;
             }
+            #endif
         }
         fclose(fp);
     }
@@ -516,6 +524,8 @@ void dump_registers(int pid)
     struct pt_regs r;
 #elif defined(__x86_64__)
     struct user_regs_struct r;
+#elif defined(__mips__)
+
 #endif
 
     LOG("[registers]\n");
@@ -548,6 +558,25 @@ void dump_registers(int pid)
          r.cs, r.eflags, r.rsp, r.ss, r.fs_base);
     LOG(" gs_base %08x  ds %08x  es %08x   fs %08x gs %08x\n",
          r.gs_base, r.ds, r.es, r.fs, r.gs);
+#elif defined(__mips__)
+    LOG(" zero %08x  at %08x  v0 %08x  v1 %08x\n",
+         r.regs[0], r.regs[1], r.regs[2], r.regs[3]);
+    LOG(" a0 %08x  a1 %08x  a2 %08x  a3 %08x\n",
+         r.regs[4], r.regs[5], r.regs[6], r.regs[7]);
+    LOG(" t0 %08x  t1 %08x  t2 %08x  t3 %08x\n",
+         r.regs[8], r.regs[9], r.regs[10], r.regs[11]);
+    LOG(" t4 %08x  t5 %08x  t6 %08x  t7 %08x\n",
+         r.regs[12], r.regs[13], r.regs[14], r.regs[15]);
+    LOG(" s0 %08x  s1 %08x  s2 %08x  s3 %08x\n",
+         r.regs[16], r.regs[17], r.regs[18], r.regs[19]);
+    LOG(" s4 %08x  s5 %08x  s6 %08x  s7 %08x\n",
+         r.regs[20], r.regs[21], r.regs[22], r.regs[23]);
+    LOG(" t8 %08x  t9 %08x  gp %08x  sp %08x\n",
+         r.regs[24], r.regs[25], r.regs[28], r.regs[29]);
+    LOG(" fp %08x  ra %08x\n",
+         r.regs[30], r.regs[31]);
+    LOG(" lo %08x  hi %08x  cp0_epc %08x  cp0_badvaddr %08x  cp0_status %08x  cp0_cause %08x\n",
+         r.lo, r.hi, r.cp0_epc, r.cp0_badvaddr, r.cp0_status, r.cp0_cause);
 #else
 
 #endif
@@ -806,13 +835,13 @@ int generate_crash_report(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
     /* get_mapinfo_list retrieves list and outputs to LOG */
     milist = get_mapinfo_list(pid); /* uses /proc */
     LOG("================\n\n");
-
+#if 0
     if (!milist)
     {
         LOG("crash_handler:  failed to load memory maps\n");
         return 1;
     }
-
+#endif
     // Sieze main thead first
     if (ptrace(PTRACE_SEIZE, pid, (void *)0, (void *)0) != 0)
     {
@@ -892,7 +921,9 @@ int generate_crash_report(pid_t pid, unsigned sig, unsigned uid, unsigned gid)
 
     LOG("--- done ---\n");
 
+#if 0
     free_mapinfo_list(milist);
+#endif
 
     return 0;
 }
