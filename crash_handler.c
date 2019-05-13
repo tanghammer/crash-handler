@@ -525,7 +525,7 @@ void dump_registers(int pid)
 #elif defined(__x86_64__)
     struct user_regs_struct r;
 #elif defined(__mips__)
-
+    struct user_regs_struct r;
 #endif
 
     LOG("[registers]\n");
